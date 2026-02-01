@@ -1,0 +1,4 @@
+name: agm-sentinel
+description: Governance Layer for AI Coding. Intercepts requests, orchestrates LLMs with strict rules (TDD, OWASP, Atomic Design), and auto-updates documentation.
+owner: ""
+host: ""
