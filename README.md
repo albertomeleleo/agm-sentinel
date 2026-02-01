@@ -6,10 +6,11 @@
 
 `agm-sentinel` is a [GitHub CLI](https://cli.github.com/) extension that sits between the developer and an LLM, acting as a governance layer for AI-assisted coding. Instead of letting an AI produce unreviewed code, agm-sentinel orchestrates the generation process through a strict pipeline:
 
-1. **Read** project-level governance rules (TDD, OWASP, Atomic Design, documentation policies).
-2. **Generate tests first** (TDD) based on the developer's prompt.
-3. **Generate implementation code** that satisfies those tests.
-4. **Audit the output** against the OWASP Top-10 before presenting it.
+1. **Read** project-level governance rules from `.sentinel/rules.yml` (TDD, OWASP, Atomic Design, branch policies).
+2. **Check the branch** — if the branch check rule is enabled and you are on a protected branch (`main`, `master`, ...), enforce creation of a properly named `feature/`, `bugfix/`, `refactor/` or `hotfix/` branch before proceeding.
+3. **Generate tests first** (TDD) based on the developer's prompt.
+4. **Generate implementation code** that satisfies those tests.
+5. **Audit the output** against the OWASP Top-10 before presenting it.
 
 The result is AI-generated code that is secure, tested, and aligned with your team's standards — by design, not by luck.
 
@@ -40,14 +41,16 @@ agm-sentinel/
 └── src/
     ├── main.py             # Typer CLI app (init, create commands)
     ├── config/
-    │   └── settings.py     # Pydantic BaseSettings — env-based config
+    │   ├── settings.py     # Pydantic BaseSettings — env-based config
+    │   └── rules.py        # Parses .sentinel/rules.yml into structured config
     ├── core/
     │   └── llm_interface.py  # AIProvider abstract base class
     ├── adapters/
     │   ├── mock_adapter.py     # Returns fixed responses (no API key needed)
     │   └── copilot_adapter.py  # Azure AI Inference / GitHub Models
     └── utils/
-        └── file_ops.py     # File read/write helpers
+        ├── file_ops.py     # File read/write helpers
+        └── git_ops.py      # Git branch check/create helpers
 ```
 
 ## Installation
@@ -60,13 +63,13 @@ agm-sentinel/
 ### As a GitHub CLI extension
 
 ```bash
-gh extension install <owner>/agm-sentinel
+gh extension install albertomeleleo/agm-sentinel
 ```
 
 ### From source (development)
 
 ```bash
-git clone https://github.com/<owner>/agm-sentinel.git
+git clone https://github.com/albertomeleleo/agm-sentinel.git
 cd agm-sentinel
 pip install -r requirements.txt
 chmod +x agm-sentinel
@@ -112,9 +115,21 @@ rules:
   owasp: true
   atomic_design: true
   documentation: auto
+
+  # Branch check: enforce branching conventions before code generation.
+  branch_check:
+    enabled: true
+    protected_branches:
+      - main
+      - master
+    prefixes:
+      - feature
+      - bugfix
+      - refactor
+      - hotfix
 ```
 
-These rules are passed as context to the LLM during code generation and auditing.
+These rules serve two purposes: they are passed as context to the LLM during code generation **and** they configure runtime governance checks (like branch enforcement).
 
 ## Usage
 
@@ -141,6 +156,8 @@ Options:
 | Flag | Short | Default | Description |
 |---|---|---|---|
 | `--provider` | `-p` | `mock` | AI provider to use (`mock` or `copilot`) |
+| `--branch-type` | `-b` | _(none)_ | Branch type: `feature`, `bugfix`, `refactor`, `hotfix` |
+| `--branch-name` | `-n` | _(none)_ | Branch descriptor (e.g. `add-login-form`) |
 
 **Example with the Copilot provider:**
 
@@ -148,12 +165,22 @@ Options:
 gh sentinel create "REST API endpoint for user registration" --provider copilot
 ```
 
-The command runs a four-step pipeline and displays the results using rich panels:
+**Example with branch creation (when branch check is enabled and you are on `main`):**
+
+```bash
+gh sentinel create "add user login" -b feature -n add-user-login
+# Creates branch feature/add-user-login, switches to it, then generates code.
+```
+
+If `branch_check.enabled` is `true` in your rules and you run `create` while on a protected branch without specifying `--branch-type` and `--branch-name`, the command will exit with an error asking you to provide them.
+
+The command runs a five-step pipeline and displays the results using rich panels:
 
 1. **Rules loaded** — reads `.sentinel/rules.yml` (or falls back to defaults).
-2. **Tests generated** — asks the LLM to produce tests first (TDD).
-3. **Code generated** — asks the LLM for the implementation.
-4. **Security audit** — asks the LLM to review the code against OWASP Top-10.
+2. **Branch check** — if enabled, verifies or creates the correct branch.
+3. **Tests generated** — asks the LLM to produce tests first (TDD).
+4. **Code generated** — asks the LLM for the implementation.
+5. **Security audit** — asks the LLM to review the code against OWASP Top-10.
 
 ## Extending agm-sentinel
 
@@ -194,9 +221,31 @@ elif provider == "gemini":
 gh sentinel create "my prompt" --provider gemini
 ```
 
+### Configuring the branch check
+
+The `branch_check` rule is enforced at runtime (not just passed to the LLM). You can customise every aspect in `.sentinel/rules.yml`:
+
+```yaml
+rules:
+  branch_check:
+    enabled: true                # set to false to disable entirely
+    protected_branches:          # branches where direct work is blocked
+      - main
+      - master
+      - develop
+    prefixes:                    # allowed branch type prefixes
+      - feature
+      - bugfix
+      - refactor
+      - hotfix
+      - docs                     # add your own conventions
+```
+
+When disabled (`enabled: false`), the `create` command skips the branch check entirely and `--branch-type` / `--branch-name` are ignored.
+
 ### Adding new governance rules
 
-Edit `.sentinel/rules.yml` to add custom keys. Since the entire file content is passed as context to the LLM, you can add any directive the model should follow:
+Edit `.sentinel/rules.yml` to add custom keys. Since the entire file content is also passed as context to the LLM, you can add any directive the model should follow:
 
 ```yaml
 rules:
